@@ -303,7 +303,6 @@ static int handle_enum(char *optarg, void *tgt, struct prog_option *opt)
 	return 0;
 }
 
-// Function to parse CIDR notation
 static int parse_cidr(char *cidr, struct ip_addr *addr, int *prefixlen) {
     char *slash = strchr(cidr, '/');
     if (!slash) {

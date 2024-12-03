@@ -807,48 +807,63 @@ static struct prog_option ip_options[] = {
 };
 
 static int do_ip(const void *cfg, const char *pin_root_path) {
-    const struct ip_addr *addr = cfg;
-    int map_fd, ret = 0;
+    int map_fd = -1, err = EXIT_SUCCESS, lock_fd;
+    char modestr[100], addrstr[100];
+    const struct ipopt *opt = cfg;
+    struct ip_addr addr = opt->addr;
 
-    // Open the IP map
-    map_fd = open_bpf_map_file(pin_root_path, "ip_map", NULL);
-    if (map_fd < 0) {
-        pr_warn("Failed to open IP map file\n");
-        return -1;
-    }
+    lock_fd = prog_lock_acquire(pin_root_path);
+    if (lock_fd < 0)
+        return lock_fd;
 
-    // Handle CIDR range
-    if (addr->prefixlen != 32) {
+    print_flags(modestr, sizeof(modestr), map_flags_srcdst, opt->mode);
+    print_addr(addrstr, sizeof(addrstr), &opt->addr);
+    pr_debug("%s addr %s mode %s\n", opt->remove ? "Removing" : "Adding",
+             addrstr, modestr);
+
+    if (addr.af == AF_INET && addr.prefixlen < 32) {
         struct in_addr start_addr, end_addr;
-        uint32_t mask = htonl(~((1 << (32 - addr->prefixlen)) - 1));
+        uint32_t mask = htonl(~((1 << (32 - addr.prefixlen)) - 1));
 
-        start_addr.s_addr = addr->addr.s_addr & mask;
-        end_addr.s_addr = addr->addr.s_addr | ~mask;
+        start_addr.s_addr = addr.addr.s_addr & mask;
+        end_addr.s_addr = addr.addr.s_addr | ~mask;
 
-        // Apply filtering logic for CIDR range
         for (uint32_t ip = ntohl(start_addr.s_addr); ip <= ntohl(end_addr.s_addr); ip++) {
             struct in_addr current_addr;
             current_addr.s_addr = htonl(ip);
 
-            ret = bpf_map_update_elem(map_fd, &current_addr, &addr->value, BPF_ANY);
-            if (ret) {
+            map_fd = __do_address(pin_root_path, textify(MAP_NAME_IPV4), "ipv4",
+                                  &current_addr, opt->remove, opt->mode);
+
+            if (map_fd < 0) {
                 pr_warn("Failed to update IP map for CIDR range\n");
-                close(map_fd);
-                return -1;
+                err = map_fd;
+                goto out;
             }
         }
     } else {
-        // Handle individual IP address
-        ret = bpf_map_update_elem(map_fd, &addr->addr, &addr->value, BPF_ANY);
-        if (ret) {
-            pr_warn("Failed to update IP map for individual IP\n");
-            close(map_fd);
-            return -1;
+        map_fd = __do_address(pin_root_path,
+                              addr.af == AF_INET ? textify(MAP_NAME_IPV4) : textify(MAP_NAME_IPV6),
+                              addr.af == AF_INET ? "ipv4" : "ipv6",
+                              &addr.addr, opt->remove, opt->mode);
+
+        if (map_fd < 0) {
+            err = map_fd;
+            goto out;
         }
     }
 
-    close(map_fd);
-    return ret;
+    if (opt->print_status) {
+        err = print_ips();
+        if (err)
+            goto out;
+    }
+
+out:
+    if (map_fd >= 0)
+        close(map_fd);
+    prog_lock_release(lock_fd);
+    return err;
 }
 
 int print_ethers(int map_fd)

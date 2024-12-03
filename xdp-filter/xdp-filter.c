@@ -823,10 +823,10 @@ static int do_ip(const void *cfg, const char *pin_root_path) {
 
     if (addr.af == AF_INET && addr.prefixlen < 32) {
         struct in_addr start_addr, end_addr;
-        uint32_t mask = htonl(~((1 << (32 - addr.prefixlen)) - 1));
+        uint32_t mask = htonl(~((1U << (32 - addr.prefixlen)) - 1));
 
-        start_addr.s_addr = addr.addr.s_addr & mask;
-        end_addr.s_addr = addr.addr.s_addr | ~mask;
+        start_addr.s_addr = addr.addr.v4.s_addr & mask;
+        end_addr.s_addr = addr.addr.v4.s_addr | ~mask;
 
         for (uint32_t ip = ntohl(start_addr.s_addr); ip <= ntohl(end_addr.s_addr); ip++) {
             struct in_addr current_addr;

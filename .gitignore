@@ -66,3 +66,6 @@ compile_commands.json
 
 # BPF skeleton files
 *.skel.h
+
+# gitpod files
+.gitpod.yml

@@ -14,6 +14,7 @@
 #include <linux/if_link.h> /* XDP_FLAGS_* depend on kernel-headers installed */
 #include <linux/if_xdp.h>
 #include <arpa/inet.h>
+#include <netinet/in.h>
 
 #include "params.h"
 #include "logging.h"
@@ -316,6 +317,48 @@ static int handle_enum(char *optarg, void *tgt, struct prog_option *opt)
 		return -EINVAL;
 	*opt_set = val->value;
 	return 0;
+}
+
+// Function to parse CIDR notation
+static int parse_cidr(char *cidr, struct ip_addr *addr, int *prefixlen) {
+    char *slash = strchr(cidr, '/');
+    if (!slash) {
+        return -EINVAL;
+    }
+    *slash = '\0';
+    int ret = inet_pton(AF_INET, cidr, &addr->addr);
+    if (ret != 1) {
+        return -EINVAL;
+    }
+    *prefixlen = atoi(slash + 1);
+    if (*prefixlen < 0 || *prefixlen > 32) {
+        return -EINVAL;
+    }
+    return 0;
+}
+
+static int handle_ipaddr(char *optarg, void *tgt, __unused struct prog_option *opt) {
+    struct ip_addr *addr = tgt;
+    int af;
+    int prefixlen = 32; // default prefix length
+
+    // Check if the address is in CIDR format
+    if (strchr(optarg, '/')) {
+        int rc = parse_cidr(optarg, addr, &prefixlen);
+        if (rc != 0) {
+            pr_warn("Invalid CIDR address: %s\n", optarg);
+            return -ENOENT;
+        }
+    } else {
+        af = strchr(optarg, ':') ? AF_INET6 : AF_INET;
+        if (inet_pton(af, optarg, &addr->addr) != 1) {
+            pr_warn("Invalid IP address: %s\n", optarg);
+            return -ENOENT; // caller won't print error on ENOENT
+        }
+        addr->af = af;
+    }
+    addr->prefixlen = prefixlen;
+    return 0;
 }
 
 static void print_enum_vals(char *buf, size_t buf_len,

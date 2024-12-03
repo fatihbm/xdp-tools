@@ -280,22 +280,6 @@ bool ipaddr_is_null(const struct ip_addr *addr) {
 	return memcmp(addr, &nulladdr, sizeof(nulladdr)) == 0;
 }
 
-static int handle_ipaddr(char *optarg, void *tgt, __unused struct prog_option *opt)
-{
-	struct ip_addr *addr = tgt;
-	int af;
-
-	af = strchr(optarg, ':') ? AF_INET6 : AF_INET;
-
-	if (inet_pton(af, optarg, &addr->addr) != 1) {
-		pr_warn("Invalid IP address: %s\n", optarg);
-		return -ENOENT; /* caller won't print error on ENOENT */
-	}
-
-	addr->af = af;
-	return 0;
-}
-
 static const struct enum_val *find_enum(const struct enum_val *enum_vals,
 					const char *chr)
 {

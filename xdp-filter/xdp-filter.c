@@ -13,6 +13,11 @@
 #include <bpf/libbpf.h>
 #include <xdp/libxdp.h>
 #include <arpa/inet.h>
+#include <netinet/in.h>
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include <linux/if_ether.h>
 
@@ -801,65 +806,45 @@ static struct prog_option ip_options[] = {
 		      .typearg = map_flags_srcdst,
 		      .help = "Filter mode; default dst"),
 	DEFINE_OPTION("status", OPT_BOOL, struct ipopt, print_status,
-		      .short_opt = 's',
-		      .help = "Print status of filtered addresses after changing"),
-	END_OPTIONS
-};
+int do_ip(struct ip_addr addr, struct prog_option *opt, const char *pin_root_path, int lock_fd) {
+	int map_fd, err = 0;
+	struct in_addr start_addr, end_addr;
 
-static int do_ip(const void *cfg, const char *pin_root_path) {
-    int map_fd = -1, err = EXIT_SUCCESS, lock_fd;
-    char modestr[100], addrstr[100];
-    const struct ipopt *opt = cfg;
-    struct ip_addr addr = opt->addr;
+	if (addr.af == AF_INET && addr.prefixlen < 32) {
+		uint32_t mask = htonl(~((1U << (32 - addr.prefixlen)) - 1));
+		start_addr.s_addr = addr.addr.v4.s_addr & mask;
+		end_addr.s_addr = addr.addr.v4.s_addr | ~mask;
 
-    lock_fd = prog_lock_acquire(pin_root_path);
-    if (lock_fd < 0)
-        return lock_fd;
+		map_fd = __do_cidr(pin_root_path, textify(MAP_NAME_IPV4), "ipv4", &start_addr, &end_addr, opt->remove, opt->mode);
+		if (map_fd < 0) {
+			pr_warn("Failed to update IP map for CIDR range\n");
+			err = map_fd;
+			goto out;
+		}
+	} else {
+		map_fd = __do_address(pin_root_path,
+							  addr.af == AF_INET ? textify(MAP_NAME_IPV4) : textify(MAP_NAME_IPV6),
+							  addr.af == AF_INET ? "ipv4" : "ipv6",
+							  &addr.addr, opt->remove, opt->mode);
 
-    print_flags(modestr, sizeof(modestr), map_flags_srcdst, opt->mode);
-    print_addr(addrstr, sizeof(addrstr), &opt->addr);
-    pr_debug("%s addr %s mode %s\n", opt->remove ? "Removing" : "Adding",
-             addrstr, modestr);
+		if (map_fd < 0) {
+			err = map_fd;
+			goto out;
+		}
+	}
 
-    if (addr.af == AF_INET && addr.prefixlen < 32) {
-        struct in_addr start_addr, end_addr;
-        uint32_t mask = htonl(~((1U << (32 - addr.prefixlen)) - 1));
-
-        start_addr.s_addr = addr.addr.v4.s_addr & mask;
-        end_addr.s_addr = addr.addr.v4.s_addr | ~mask;
-
-        for (uint32_t ip = ntohl(start_addr.s_addr); ip <= ntohl(end_addr.s_addr); ip++) {
-            struct in_addr current_addr;
-            current_addr.s_addr = htonl(ip);
-
-            map_fd = __do_address(pin_root_path, textify(MAP_NAME_IPV4), "ipv4",
-                                  &current_addr, opt->remove, opt->mode);
-
-            if (map_fd < 0) {
-                pr_warn("Failed to update IP map for CIDR range\n");
-                err = map_fd;
-                goto out;
-            }
-        }
-    } else {
-        map_fd = __do_address(pin_root_path,
-                              addr.af == AF_INET ? textify(MAP_NAME_IPV4) : textify(MAP_NAME_IPV6),
-                              addr.af == AF_INET ? "ipv4" : "ipv6",
-                              &addr.addr, opt->remove, opt->mode);
-
-        if (map_fd < 0) {
-            err = map_fd;
-            goto out;
-        }
-    }
-
-    if (opt->print_status) {
-        err = print_ips();
-        if (err)
-            goto out;
-    }
+	if (opt->print_status) {
+		err = print_ips();
+		if (err)
+			goto out;
+	}
 
 out:
+	if (map_fd >= 0)
+		close(map_fd);
+	prog_lock_release(lock_fd);
+	return err;
+}
     if (map_fd >= 0)
         close(map_fd);
     prog_lock_release(lock_fd);
